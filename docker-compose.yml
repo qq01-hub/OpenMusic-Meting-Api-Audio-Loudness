@@ -9,7 +9,6 @@ services:
       PORT: "3100"
       MAX_DOWNLOAD_BYTES: "67108864"
       REQUEST_TIMEOUT_MS: "30000"
-      UPSTREAM_API_TOKEN: "${UPSTREAM_API_TOKEN:-}"
     mem_limit: 256m
     depends_on:
       redis:

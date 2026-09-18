@@ -6,12 +6,6 @@ import { createRedisCache } from './cache.js'
 const MAX_DOWNLOAD_BYTES = Number(process.env.MAX_DOWNLOAD_BYTES || 64 * 1024 * 1024)
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 30_000)
 const FFMPEG_BIN = process.env.FFMPEG_BIN || 'ffmpeg'
-const UPSTREAM_API_TOKEN = String(process.env.UPSTREAM_API_TOKEN || '').trim()
-
-export const buildUpstreamHeaders = (token = UPSTREAM_API_TOKEN) => {
-    const value = String(token || '').trim()
-    return value ? { Authorization: `Bearer ${value}` } : {}
-}
 
 export const extractAudioUrl = (requestUrl) => {
     const marker = 'url='
@@ -97,9 +91,8 @@ export const createApp = ({ cache = createRedisCache() } = {}) => {
         if (!url) return c.json({ error: 'url is required' }, 400)
         let parsed
         try { parsed = new URL(url) } catch { return c.json({ error: 'url must be valid' }, 400) }
-        if (!['http:', 'https:', 'data:'].includes(parsed.protocol)) return c.json({ error: 'only http, https and data URLs are supported' }, 400)
+        if (!['http:', 'https:'].includes(parsed.protocol)) return c.json({ error: 'only direct http and https audio URLs are supported' }, 400)
         const songId = c.req.query('id') || c.req.query('songId')
-        const upstreamToken = c.req.query('key') || c.req.query('token') || UPSTREAM_API_TOKEN
         if (songId) {
             try {
                 const cached = await cache.get(songId)
@@ -109,7 +102,7 @@ export const createApp = ({ cache = createRedisCache() } = {}) => {
         const controller = new AbortController()
         const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
         try {
-            const response = await fetchAudioResponse(parsed, { signal: controller.signal, headers: buildUpstreamHeaders(upstreamToken) })
+            const response = await fetchAudioResponse(parsed, { signal: controller.signal })
             if (!response.ok) return c.json({ error: `audio download failed with status ${response.status}` }, 502)
             const buffer = await readResponse(response)
             const result = await analyzeBuffer(buffer, response.headers.get('content-type') || '')

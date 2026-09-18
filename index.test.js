@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createApp } from './server.js'
+import { analyzeBuffer, createApp } from './server.js'
 
 const makeWav16Mono = (samples, sampleRate = 8000) => {
     const dataSize = samples.length * 2
@@ -23,18 +23,12 @@ const makeWav16Mono = (samples, sampleRate = 8000) => {
 }
 
 test('returns the shared gain and peak shape for an audio URL', async () => {
-        const wav = makeWav16Mono([0.5, -0.5, 0.5, -0.5])
-        const url = `data:audio/wav;base64,${wav.toString('base64')}`
-        const response = await createApp().request(`/analyze?url=${encodeURIComponent(url)}`)
-
-        assert.equal(response.status, 200)
-        assert.deepEqual(await response.json(), {
+    const wav = makeWav16Mono([0.5, -0.5, 0.5, -0.5])
+    assert.deepEqual(await analyzeBuffer(wav, 'audio/wav'), {
             loudness: { gain: -6.0206, peak: 0.5 },
             duration: 0.0005,
-            source: 'url',
             decoder: 'wav',
-            cacheHit: false,
-        })
+    })
 })
 
 test('rejects an absent URL without downloading anything', async () => {
@@ -51,13 +45,16 @@ test('returns the cached result for a repeated song id', async () => {
         async set(id, value) { values.set(id, value) },
     }
     const wav = makeWav16Mono([0.25, -0.25])
-    const url = `data:audio/wav;base64,${wav.toString('base64')}`
+    const url = 'https://cdn.example.com/audio/song-1.wav'
     const app = createApp({ cache })
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = async () => new Response(wav, { status: 200, headers: { 'content-type': 'audio/wav' } })
+    try {
+        const first = await app.request(`/analyze?id=song-1&url=${encodeURIComponent(url)}`)
+        assert.equal(first.status, 200)
+        const second = await app.request(`/analyze?id=song-1&url=${encodeURIComponent(url)}`)
 
-    const first = await app.request(`/analyze?id=song-1&url=${encodeURIComponent(url)}`)
-    assert.equal(first.status, 200)
-    const second = await app.request('/analyze?id=song-1&url=data:text/plain,not-audio')
-
-    assert.equal(second.status, 200)
-    assert.equal((await second.json()).cacheHit, true)
+        assert.equal(second.status, 200)
+        assert.equal((await second.json()).cacheHit, true)
+    } finally { globalThis.fetch = originalFetch }
 })

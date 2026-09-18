@@ -21,7 +21,7 @@
 | Docker | 是 | 推荐部署方式 |
 | Docker Compose v2 | 是 | 一键启动应用与 Redis |
 | `curl` | 是 | 仅远程一键部署需要 |
-| [Meting-API](https://github.com/qq01-hub/Meting-API) | 是 | 提供音频 URL；需要鉴权时配置 Token |
+| [Meting-API](https://github.com/qq01-hub/Meting-API) | 是 | 提供歌曲音频直链 |
 | Node.js `>=22`、`ffmpeg`、Redis | 源码部署 | Docker 部署无需单独安装 |
 
 > Docker Compose 已内置 Redis 和 `ffmpeg`。Meting-API 作为上游服务使用，不包含在本项目镜像中。
@@ -58,7 +58,6 @@ http://localhost:3100/analyze?id=song-123&url=https%3A%2F%2Fexample.com%2Faudio.
 |:---|:---:|:---|
 | `url` | ✅ | 音频 URL；完整 URL 必须进行 URL 编码 |
 | `id` / `songId` | — | 歌曲 ID；传入后启用 Redis 缓存 |
-| `key` | — | Meting-API 鉴权 Token |
 
 响应示例：
 
@@ -74,35 +73,17 @@ http://localhost:3100/analyze?id=song-123&url=https%3A%2F%2Fexample.com%2Faudio.
 }
 ```
 
-> `gain` 为 RMS dBFS，`peak` 为线性峰值，均保留 4 位小数。外层 `url` 参数必须编码完整的 Meting URL，避免其中的 `&server=...` 被误解析。
-
-### Token 配置
-
-```powershell
-$env:UPSTREAM_API_TOKEN = '你的 Meting API Token'
-docker compose up -d --build
-```
+> `url` 必须是歌曲音频直链，而不是 Meting-API 的接口地址；`gain` 为 RMS dBFS，`peak` 为线性峰值，均保留 4 位小数。URL 中如果包含 `&`，请先对完整 URL 进行编码。
 
 ## ⚙️ 配置项
 
 | 环境变量 | 默认值 | 说明 |
 |:---|:---:|:---|
 | `PORT` | `3100` | 服务端口 |
-| `UPSTREAM_API_TOKEN` | 空 | 默认 Meting-API Token |
 | `MAX_DOWNLOAD_BYTES` | `67108864` | 单个音频最大下载大小（字节） |
 | `REQUEST_TIMEOUT_MS` | `30000` | 音频请求超时时间（毫秒） |
 
 健康检查：`http://localhost:3100/healthz`
-
-## 🐳 Docker 镜像
-
-每次向 GitHub 仓库推送代码，GitHub Actions 会自动构建并推送 Docker 镜像到 GHCR，不需要创建 GitHub Release。
-
-```text
-ghcr.io/qq01-hub/openmusic-meting-api-audio-loudness:latest
-```
-
-工作流文件：`.github/workflows/docker-publish.yml`
 
 ## 🧪 源码运行
 
