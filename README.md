@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🎚️ [OpenMusic-Meting-Api-Audio-Loudness](https://github.com/qq01-hub/OpenMusic-Meting-Api-Audio-Loudness)
+# 🎵 [OpenMusic-Meting-Api-Audio-Loudness](https://github.com/qq01-hub/OpenMusic-Meting-Api-Audio-Loudness)
 
 <p><strong>Meting-API 的音频响度分析辅助服务</strong></p>
 
