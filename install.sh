@@ -2,13 +2,8 @@
 set -Eeuo pipefail
 
 APP_DIR="${APP_DIR:-/opt/meting-api-audio-loudness}"
-REPO_URL="${METING_AUDIO_LOUDNESS_REPO:-}"
+REPO_URL="${METING_AUDIO_LOUDNESS_REPO:-https://github.com/qq01-hub/OpenMusic-Meting-Api-Audio-Loudness.git}"
 BRANCH="${METING_AUDIO_LOUDNESS_BRANCH:-main}"
-
-if [ -z "$REPO_URL" ]; then
-    echo '请设置 METING_AUDIO_LOUDNESS_REPO 为 meting-api-audio-loudness 项目的 Git 仓库地址。' >&2
-    exit 1
-fi
 
 if ! command -v docker >/dev/null 2>&1; then
     echo '未检测到 Docker，请先安装 Docker。' >&2

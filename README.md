@@ -1,37 +1,64 @@
-# [OpenMusic-Meting-Api-Audio-Loudness](https://github.com/qq01-hub/OpenMusic-Meting-Api-Audio-Loudness)
+<div align="center">
 
-这是 [Meting-API](https://github.com/qq01-hub/Meting-API) 项目的辅助服务。
+# 🎚️ [OpenMusic-Meting-Api-Audio-Loudness](https://github.com/qq01-hub/OpenMusic-Meting-Api-Audio-Loudness)
 
-服务接收 Meting 返回的音频 URL，使用流式 `ffmpeg` 计算音频响度，并返回统一的 `gain` 与 `peak` 字段。
+<p><strong>Meting-API 的音频响度分析辅助服务</strong></p>
 
-## 功能特性
+<p>
+  流式音频分析 · RMS 响度计算 · 峰值检测 · Redis 缓存 · Docker 部署
+</p>
 
-| 能力 | 说明 |
-| --- | --- |
-| 响度分析 | 计算全音频 PCM RMS 的 dBFS（`gain`）和线性峰值（`peak`） |
-| Redis 缓存 | 按歌曲 ID 缓存分析结果，默认保留 30 天，避免重复下载和分析 |
-| 流式处理 | 不缓存解码后的 PCM，降低内存占用 |
-| 安全限制 | 默认限制下载大小为 64 MiB，请求超时为 30 秒 |
-| 容器化部署 | 支持 Docker、Docker Compose，以及 Windows / Linux 一键部署 |
+</div>
 
-## 快速开始
+> 本项目是 [Meting-API](https://github.com/qq01-hub/Meting-API) 的辅助服务，负责分析音频 URL 并返回统一的 `gain` 与 `peak` 响度字段。
 
-### 本地运行
+## 🚀 快速开始
 
-环境要求：Node.js 22+、`ffmpeg`、Redis。
+### 前置依赖
+
+| 依赖 | 必填 | 说明 |
+|:---|:---:|:---|
+| Docker | 是 | 推荐部署方式 |
+| Docker Compose v2 | 是 | 一键启动应用与 Redis |
+| `curl` | 是 | 仅远程一键部署需要 |
+| [Meting-API](https://github.com/qq01-hub/Meting-API) | 是 | 提供音频 URL；需要鉴权时配置 Token |
+| Node.js `>=22`、`ffmpeg`、Redis | 源码部署 | Docker 部署无需单独安装 |
+
+> Docker Compose 已内置 Redis 和 `ffmpeg`。Meting-API 作为上游服务使用，不包含在本项目镜像中。
+
+### Docker 一键部署（推荐）
+
+服务器安装 Docker、Docker Compose v2 和 `curl` 后，执行一条命令即可完成下载、构建、启动和健康检查：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/qq01-hub/OpenMusic-Meting-Api-Audio-Loudness/main/install.sh | bash
+```
+
+默认安装目录：`/opt/meting-api-audio-loudness`  
+默认服务地址：`http://localhost:3100`
+
+### Windows 一键部署
+
+在 PowerShell 中执行：
 
 ```powershell
-npm install
-npm start
+Set-ExecutionPolicy -Scope Process Bypass
+.\deploy.ps1
 ```
 
-服务默认监听 `3100` 端口。
+## 📡 API
 
-### 请求示例
+### `GET /analyze`
 
 ```text
-GET http://localhost:3100/analyze?id=song-123&url=https%3A%2F%2Fexample.com%2Faudio.mp3
+http://localhost:3100/analyze?id=song-123&url=https%3A%2F%2Fexample.com%2Faudio.mp3
 ```
+
+| 参数 | 必填 | 说明 |
+|:---|:---:|:---|
+| `url` | ✅ | 音频 URL；完整 URL 必须进行 URL 编码 |
+| `id` / `songId` | — | 歌曲 ID；传入后启用 Redis 缓存 |
+| `key` | — | Meting-API 鉴权 Token |
 
 响应示例：
 
@@ -47,104 +74,43 @@ GET http://localhost:3100/analyze?id=song-123&url=https%3A%2F%2Fexample.com%2Fau
 }
 ```
 
-其中：
+> `gain` 为 RMS dBFS，`peak` 为线性峰值，均保留 4 位小数。外层 `url` 参数必须编码完整的 Meting URL，避免其中的 `&server=...` 被误解析。
 
-- `gain`：全音频 PCM RMS 的 dBFS，保留 4 位小数。
-- `peak`：全音频 PCM 的线性峰值，保留 4 位小数。
-- `cacheHit`：是否直接命中 Redis 缓存。
-
-## API 使用说明
-
-### `/analyze`
-
-| 参数 | 必填 | 说明 |
-| --- | --- | --- |
-| `url` | 是 | 音频 URL；如果 URL 中包含 `&`，必须对完整 URL 进行编码 |
-| `id` / `songId` | 否 | 歌曲 ID。传入后启用 Redis 缓存 |
-| `key` | 否 | 访问需要鉴权的 Meting API 时使用的 Token |
-
-示例：
-
-```text
-/analyze?key=你的Token&id=test-001&url=编码后的音频链接
-```
-
-> 注意：外层 `url` 参数必须对完整的 Meting URL 做 URL 编码，避免其中的 `&server=...` 被本服务解析为自己的参数。
-
-### 鉴权 Token
-
-可以通过请求参数传入 Token，也可以设置环境变量作为默认 Token：
+### Token 配置
 
 ```powershell
 $env:UPSTREAM_API_TOKEN = '你的 Meting API Token'
 docker compose up -d --build
 ```
 
-## Docker 部署
-
-### Docker Compose（推荐）
-
-```powershell
-docker compose up -d --build
-```
-
-启动后检查健康状态：
-
-```text
-http://localhost:3100/healthz
-```
-
-### 单容器运行
-
-```powershell
-docker build -t openmusic-meting-api .
-docker run --rm -p 3100:3100 --memory=256m openmusic-meting-api
-```
-
-## 一键部署
-
-### Windows
-
-在 PowerShell 中执行：
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\deploy.ps1
-```
-
-脚本会自动构建镜像、启动服务，并等待 `http://localhost:3100/healthz` 通过。重复执行会复用并更新同一个 Compose 服务。
-
-### Linux
-
-需要预先安装 Docker、Docker Compose v2 和 `curl`：
-
-```bash
-bash deploy.sh
-```
-
-脚本会自动构建镜像、启动服务，并等待健康检查通过。
-
-如果项目已发布到 GitHub，也可以使用远程安装脚本：
-
-```bash
-export METING_AUDIO_LOUDNESS_REPO=https://github.com/qq01-hub/OpenMusic-Meting-Api-Audio-Loudness.git
-curl -fsSL https://raw.githubusercontent.com/qq01-hub/OpenMusic-Meting-Api-Audio-Loudness/main/install.sh | bash
-```
-
-## 配置项
+## ⚙️ 配置项
 
 | 环境变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `PORT` | `3100` | 服务监听端口 |
-| `UPSTREAM_API_TOKEN` | 空 | 默认的 Meting API Token |
+|:---|:---:|:---|
+| `PORT` | `3100` | 服务端口 |
+| `UPSTREAM_API_TOKEN` | 空 | 默认 Meting-API Token |
 | `MAX_DOWNLOAD_BYTES` | `67108864` | 单个音频最大下载大小（字节） |
 | `REQUEST_TIMEOUT_MS` | `30000` | 音频请求超时时间（毫秒） |
 
-Compose 中 Redis 最大内存为 64 MiB，应用容器最大内存为 256 MiB。
+健康检查：`http://localhost:3100/healthz`
 
-## 开发与测试
+## 🐳 Docker 镜像
+
+每次向 GitHub 仓库推送代码，GitHub Actions 会自动构建并推送 Docker 镜像到 GHCR，不需要创建 GitHub Release。
+
+```text
+ghcr.io/qq01-hub/openmusic-meting-api-audio-loudness:latest
+```
+
+工作流文件：`.github/workflows/docker-publish.yml`
+
+## 🧪 源码运行
 
 ```powershell
 npm install
-npm test
+npm start
 ```
+
+## 📄 许可证
+
+本项目为 [Meting-API](https://github.com/qq01-hub/Meting-API) 提供音频响度分析辅助能力。
