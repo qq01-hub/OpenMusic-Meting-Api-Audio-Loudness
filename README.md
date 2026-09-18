@@ -24,7 +24,7 @@
 | [Meting-API](https://github.com/qq01-hub/Meting-API) | 是 | 提供歌曲音频直链 |
 | Node.js `>=22` | 源码部署 | Docker 部署无需单独安装 |
 
-> Docker Compose 已内置 Redis 和 `ffmpeg`。Meting-API 作为上游服务使用，不包含在本项目镜像中。
+> Docker Compose 已内置 Redis 和 `ffmpeg`，Redis 使用华为云镜像 `swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/redis:7-alpine`。Meting-API 作为上游服务使用，不包含在本项目镜像中。
 
 ### Docker 一键部署（推荐）
 

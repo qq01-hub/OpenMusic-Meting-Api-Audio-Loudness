@@ -15,7 +15,7 @@ services:
         condition: service_healthy
 
   redis:
-    image: redis:7-alpine
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/redis:7-alpine
     container_name: meting-api-audio-loudness-redis
     restart: unless-stopped
     command: redis-server --save 60 1 --loglevel warning --maxmemory 64mb --maxmemory-policy allkeys-lru
