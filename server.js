@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { Hono } from 'hono'
 import { decodeWav, createPcmAccumulator } from './loudness.js'
 import { createRedisCache } from './cache.js'
@@ -6,6 +7,14 @@ import { createRedisCache } from './cache.js'
 const MAX_DOWNLOAD_BYTES = Number(process.env.MAX_DOWNLOAD_BYTES || 64 * 1024 * 1024)
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 30_000)
 const FFMPEG_BIN = process.env.FFMPEG_BIN || 'ffmpeg'
+const ANALYSIS_START_SECONDS = 20
+const ANALYSIS_DURATION_SECONDS = 30
+
+export const createFfmpegArgs = () => [
+    '-hide_banner', '-loglevel', 'error', '-i', 'pipe:0',
+    '-ss', String(ANALYSIS_START_SECONDS), '-t', String(ANALYSIS_DURATION_SECONDS),
+    '-vn', '-ac', '2', '-ar', '48000', '-f', 'f32le', 'pipe:1',
+]
 
 export const extractAudioUrl = (requestUrl) => {
     const marker = 'url='
@@ -35,11 +44,34 @@ export const fetchAudioResponse = async (target, options = {}) => {
     throw new Error('too many audio redirects')
 }
 
-const readResponse = async (response) => {
+export const pipeResponseToStdin = async (response, stdin, maxBytes = MAX_DOWNLOAD_BYTES) => {
     const reader = response.body?.getReader()
-    if (!reader) return Buffer.from(await response.arrayBuffer())
+    if (!reader) {
+        const buffer = Buffer.from(await response.arrayBuffer())
+        if (buffer.length > maxBytes) throw new Error(`audio exceeds ${maxBytes} bytes`)
+        stdin.end(buffer)
+        return
+    }
+    let size = 0
+    try {
+        while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            size += value.byteLength
+            if (size > maxBytes) throw new Error(`audio exceeds ${maxBytes} bytes`)
+            if (!stdin.write(Buffer.from(value))) await once(stdin, 'drain')
+        }
+    } finally {
+        reader.releaseLock()
+    }
+    stdin.end()
+}
+
+const readResponse = async (response) => {
     const chunks = []
     let size = 0
+    const reader = response.body?.getReader()
+    if (!reader) return Buffer.from(await response.arrayBuffer())
     try {
         while (true) {
             const { done, value } = await reader.read()
@@ -54,8 +86,8 @@ const readResponse = async (response) => {
     return Buffer.concat(chunks, size)
 }
 
-const analyzeWithFfmpeg = (buffer) => new Promise((resolve, reject) => {
-    const child = spawn(FFMPEG_BIN, ['-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-vn', '-ac', '2', '-ar', '48000', '-f', 'f32le', 'pipe:1'], { stdio: ['pipe', 'pipe', 'pipe'] })
+const analyzeWithFfmpeg = (input) => new Promise((resolve, reject) => {
+    const child = spawn(FFMPEG_BIN, createFfmpegArgs(), { stdio: ['pipe', 'pipe', 'pipe'] })
     const accumulator = createPcmAccumulator()
     let remainder = Buffer.alloc(0)
     let stderr = ''
@@ -73,7 +105,15 @@ const analyzeWithFfmpeg = (buffer) => new Promise((resolve, reject) => {
         if (code !== 0) reject(new Error(stderr.trim() || `ffmpeg exited with code ${code}`))
         else resolve(accumulator.result())
     })
-    child.stdin.end(buffer)
+    const inputPromise = Buffer.isBuffer(input)
+        ? Promise.resolve(child.stdin.end(input))
+        : pipeResponseToStdin(input, child.stdin)
+    inputPromise.catch((error) => {
+        if (error?.code === 'EPIPE' || error?.code === 'ERR_STREAM_DESTROYED') return
+        child.stdin.destroy(error)
+        child.kill()
+        reject(error)
+    })
 })
 
 export const analyzeBuffer = async (buffer, contentType = '') => {
@@ -81,6 +121,11 @@ export const analyzeBuffer = async (buffer, contentType = '') => {
     if (wav) return { loudness: (() => { const result = createPcmAccumulator(); result.add(wav.samples); return result.result() })(), duration: wav.duration, decoder: 'wav' }
     const loudness = await analyzeWithFfmpeg(buffer)
     return { loudness, decoder: 'ffmpeg', contentType }
+}
+
+export const analyzeResponse = async (response, contentType = '') => {
+    if (contentType.toLowerCase().includes('wav')) return analyzeBuffer(await readResponse(response), contentType)
+    return { loudness: await analyzeWithFfmpeg(response), decoder: 'ffmpeg', contentType }
 }
 
 export const createApp = ({ cache = createRedisCache() } = {}) => {
@@ -104,8 +149,7 @@ export const createApp = ({ cache = createRedisCache() } = {}) => {
         try {
             const response = await fetchAudioResponse(parsed, { signal: controller.signal })
             if (!response.ok) return c.json({ error: `audio download failed with status ${response.status}` }, 502)
-            const buffer = await readResponse(response)
-            const result = await analyzeBuffer(buffer, response.headers.get('content-type') || '')
+            const result = await analyzeResponse(response, response.headers.get('content-type') || '')
             if (!result.loudness) return c.json({ error: 'unable to decode audio' }, 422)
             const payload = { loudness: result.loudness, ...(result.duration ? { duration: result.duration } : {}), source: 'url', decoder: result.decoder, cacheHit: false }
             if (songId) {
