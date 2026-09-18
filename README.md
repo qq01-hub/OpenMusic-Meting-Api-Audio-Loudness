@@ -18,17 +18,17 @@
 
 | 依赖 | 必填 | 说明 |
 |:---|:---:|:---|
-| Docker | 是 | 推荐部署方式 |
+| Docker | 是 | 推荐部署方式；需提前安装 |
 | Docker Compose v2 | 是 | 一键启动应用与 Redis |
 | `curl` | 是 | 仅远程一键部署需要 |
 | [Meting-API](https://github.com/qq01-hub/Meting-API) | 是 | 提供歌曲音频直链 |
-| Node.js `>=22`、`ffmpeg`、Redis | 源码部署 | Docker 部署无需单独安装 |
+| Node.js `>=22` | 源码部署 | Docker 部署无需单独安装 |
 
 > Docker Compose 已内置 Redis 和 `ffmpeg`。Meting-API 作为上游服务使用，不包含在本项目镜像中。
 
 ### Docker 一键部署（推荐）
 
-服务器安装 Docker、Docker Compose v2 和 `curl` 后，执行一条命令即可完成下载、构建、启动和健康检查：
+服务器安装 Docker、Docker Compose v2 和 `curl` 后，执行一条命令即可下载 Compose 配置、拉取最新镜像、启动服务并完成健康检查：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/qq01-hub/OpenMusic-Meting-Api-Audio-Loudness/main/install.sh | bash
@@ -36,6 +36,8 @@ curl -fsSL https://raw.githubusercontent.com/qq01-hub/OpenMusic-Meting-Api-Audio
 
 默认安装目录：`/opt/meting-api-audio-loudness`  
 默认服务地址：`http://localhost:3100`
+
+> 一键部署不需要 Git。GHCR 镜像需要设置为公开；如果镜像为私有，请先执行 `docker login ghcr.io`。
 
 ### Windows 一键部署
 
@@ -80,6 +82,7 @@ http://localhost:3100/analyze?id=song-123&url=https%3A%2F%2Fexample.com%2Faudio.
 | 环境变量 | 默认值 | 说明 |
 |:---|:---:|:---|
 | `PORT` | `3100` | 服务端口 |
+| `IMAGE_TAG` | `latest` | Docker 镜像标签 |
 | `MAX_DOWNLOAD_BYTES` | `67108864` | 单个音频最大下载大小（字节） |
 | `REQUEST_TIMEOUT_MS` | `30000` | 音频请求超时时间（毫秒） |
 

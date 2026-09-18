@@ -2,8 +2,7 @@
 set -Eeuo pipefail
 
 APP_DIR="${APP_DIR:-/opt/meting-api-audio-loudness}"
-REPO_URL="${METING_AUDIO_LOUDNESS_REPO:-https://github.com/qq01-hub/OpenMusic-Meting-Api-Audio-Loudness.git}"
-BRANCH="${METING_AUDIO_LOUDNESS_BRANCH:-main}"
+COMPOSE_URL='https://raw.githubusercontent.com/qq01-hub/OpenMusic-Meting-Api-Audio-Loudness/main/docker-compose.yml'
 
 if ! command -v docker >/dev/null 2>&1; then
     echo '未检测到 Docker，请先安装 Docker。' >&2
@@ -14,18 +13,16 @@ if ! docker compose version >/dev/null 2>&1; then
     exit 1
 fi
 
-if [ -d "$APP_DIR/.git" ]; then
-    git -C "$APP_DIR" pull --ff-only origin "$BRANCH"
-elif command -v git >/dev/null 2>&1; then
-    mkdir -p "$(dirname "$APP_DIR")"
-    git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
-else
-    echo '未检测到 git，无法下载辅助项目。' >&2
+if ! command -v curl >/dev/null 2>&1; then
+    echo '未检测到 curl，请先安装 curl。' >&2
     exit 1
 fi
 
+mkdir -p "$APP_DIR"
+curl -fsSL "$COMPOSE_URL" -o "$APP_DIR/docker-compose.yml"
 cd "$APP_DIR"
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 
 for attempt in $(seq 1 20); do
     if curl --fail --silent --show-error --max-time 2 http://localhost:3100/healthz >/dev/null; then

@@ -3,7 +3,11 @@ $ErrorActionPreference = 'Stop'
 $projectPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location -LiteralPath $projectPath
 
-docker compose up -d --build
+docker compose pull
+if ($LASTEXITCODE -ne 0) {
+    throw 'Docker image pull failed.'
+}
+docker compose up -d
 if ($LASTEXITCODE -ne 0) {
     throw 'Docker Compose deployment failed.'
 }

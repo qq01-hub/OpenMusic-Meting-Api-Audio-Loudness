@@ -3,7 +3,8 @@ set -Eeuo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 
 for attempt in $(seq 1 15); do
     if curl --fail --silent --show-error --max-time 2 http://localhost:3100/healthz >/dev/null; then

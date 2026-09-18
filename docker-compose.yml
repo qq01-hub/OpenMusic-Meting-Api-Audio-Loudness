@@ -1,6 +1,6 @@
 services:
   meting-api-audio-loudness:
-    build: .
+    image: ghcr.io/qq01-hub/openmusic-meting-api-audio-loudness:${IMAGE_TAG:-latest}
     container_name: meting-api-audio-loudness
     restart: unless-stopped
     ports:
