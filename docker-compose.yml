@@ -3,13 +3,25 @@ services:
     image: ghcr.io/qq01-hub/openmusic-meting-api-audio-loudness:${IMAGE_TAG:-latest}
     container_name: meting-api-audio-loudness
     restart: unless-stopped
+    init: true
+    stop_grace_period: 10s
     ports:
       - "3100:3100"
     environment:
       PORT: "3100"
       MAX_DOWNLOAD_BYTES: "67108864"
       REQUEST_TIMEOUT_MS: "30000"
-    mem_limit: 256m
+      ANALYSIS_CONCURRENCY: "2"
+      ANALYSIS_QUEUE_LIMIT: "16"
+      ANALYSIS_QUEUE_TIMEOUT_MS: "2000"
+      CACHE_OPERATION_TIMEOUT_MS: "500"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    mem_limit: 1g
     depends_on:
       redis:
         condition: service_healthy

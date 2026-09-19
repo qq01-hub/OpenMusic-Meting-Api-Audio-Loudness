@@ -27,3 +27,40 @@ test('returns the cached result for a repeated song id', async () => {
     assert.equal(response.status, 200)
     assert.equal((await response.json()).cacheHit, true)
 })
+
+test('deduplicates simultaneous requests for the same song id', async () => {
+    let analyses = 0
+    const app = createApp({
+        cache: { async get() { return null }, async set() {} },
+        analyze: async () => {
+            analyses += 1
+            await new Promise((resolve) => setTimeout(resolve, 10))
+            return { loudness: { gain: -1, peak: 0.8 }, decoder: 'test' }
+        },
+    })
+    const url = 'https://cdn.example.com/audio/song-2.wav'
+    const responses = await Promise.all(Array.from({ length: 20 }, () => app.request(`/analyze?id=song-2&url=${encodeURIComponent(url)}`)))
+
+    assert.equal(analyses, 1)
+    assert.equal(responses.filter((response) => response.status === 200).length, 20)
+})
+
+test('continues analyzing when Redis is slow', async () => {
+    let analyzed = false
+    const app = createApp({
+        cacheTimeoutMs: 5,
+        cache: { async get() { return new Promise(() => {}) }, async set() {} },
+        analyze: async () => {
+            analyzed = true
+            return { loudness: { gain: -1, peak: 0.8 }, decoder: 'test' }
+        },
+    })
+    const url = 'https://cdn.example.com/audio/slow-cache.wav'
+    const response = await Promise.race([
+        app.request(`/analyze?id=slow-cache&url=${encodeURIComponent(url)}`),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('request did not bypass slow cache')), 100)),
+    ])
+
+    assert.equal(response.status, 200)
+    assert.equal(analyzed, true)
+})

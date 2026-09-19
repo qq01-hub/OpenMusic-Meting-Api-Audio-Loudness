@@ -1,21 +1,40 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { createFfmpegArgs, describeRequestError, extractAudioUrl, fetchAudioResponse, getAnalysisWindow, parseEbur128Summary, pipeResponseToStdin } from './server.js'
+import { createAnalysisLimiter, createFfmpegArgs, describeRequestError, extractAudioUrl, fetchAudioResponse, getAnalysisWindow, parseEbur128Summary, pipeResponseToStdin } from './server.js'
 
-test('analyzes the one-minute to one-minute-thirty window', () => {
-    assert.deepEqual(createFfmpegArgs(), [
-        '-hide_banner', '-loglevel', 'info', '-i', 'pipe:0', '-ss', '60', '-t', '30',
+test('rejects work when the analysis queue is full', async () => {
+    const limiter = createAnalysisLimiter({ concurrency: 1, queueLimit: 0 })
+    const release = await limiter.acquire()
+    await assert.rejects(limiter.acquire(), (error) => error.code === 'ANALYSIS_QUEUE_FULL')
+    release()
+})
+
+test('cancels a request that times out while waiting for a worker', async () => {
+    const limiter = createAnalysisLimiter({ concurrency: 1, queueLimit: 1 })
+    const release = await limiter.acquire()
+    const controller = new AbortController()
+    const queued = limiter.acquire({ signal: controller.signal })
+    controller.abort()
+    await assert.rejects(queued, (error) => error.code === 'ANALYSIS_QUEUE_ABORTED')
+    release()
+    const nextRelease = await limiter.acquire()
+    nextRelease()
+})
+
+test('limits URL analysis to seconds 30 through 40', () => {
+    assert.deepEqual(createFfmpegArgs({ source: 'https://cdn.example/audio.mp3' }), [
+        '-hide_banner', '-loglevel', 'info', '-threads', '1', '-ss', '30', '-t', '10', '-i', 'https://cdn.example/audio.mp3',
         '-vn', '-af', 'ebur128=framelog=quiet:peak=true', '-f', 'null', '-',
     ])
 })
 
-test('uses the final 30 seconds when the audio is shorter than one minute', () => {
-    assert.deepEqual(getAnalysisWindow(45), { start: 15, duration: 30 })
+test('uses seconds 30 through 40 for a long track', () => {
+    assert.deepEqual(getAnalysisWindow(180), { start: 30, duration: 10 })
 })
 
-test('keeps a 30-second window for a full-length audio track', () => {
-    assert.deepEqual(getAnalysisWindow(180), { start: 60, duration: 30 })
+test('starts at zero when the track is shorter than the analysis window', () => {
+    assert.deepEqual(getAnalysisWindow(7), { start: 0, duration: 7 })
 })
 
 test('parses integrated LUFS and true peak from ebur128 output', () => {

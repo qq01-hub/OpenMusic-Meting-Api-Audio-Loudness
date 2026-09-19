@@ -85,6 +85,11 @@ http://localhost:3100/analyze?id=song-123&url=https%3A%2F%2Fexample.com%2Faudio.
 | `IMAGE_TAG` | `latest` | Docker 镜像标签 |
 | `MAX_DOWNLOAD_BYTES` | `67108864` | 单个音频最大下载大小（字节） |
 | `REQUEST_TIMEOUT_MS` | `30000` | 音频请求超时时间（毫秒） |
+| `ANALYSIS_DURATION_SECONDS` | `10` | 分析窗口长度；默认分析第 30–40 秒 |
+| `ANALYSIS_CONCURRENCY` | `2` | 同时运行的 ffmpeg 数量；2C2G 建议保持为 2 |
+| `ANALYSIS_QUEUE_LIMIT` | `16` | 等待分析的最大任务数；超出返回 HTTP 429 |
+| `ANALYSIS_QUEUE_TIMEOUT_MS` | `2000` | 排队最长等待时间；超出返回 HTTP 429 |
+| `CACHE_OPERATION_TIMEOUT_MS` | `500` | Redis 单次读写超时；超时自动降级到直分析 |
 | `TARGET_LUFS` | `-14` | 统一响度目标；`gain` 为达到该目标所需的修正值 |
 
 响度缓存当前使用 `meting:loudness:v3:` 前缀，之前版本缓存不会被读取。

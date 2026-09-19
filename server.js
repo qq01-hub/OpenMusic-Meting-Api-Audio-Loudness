@@ -6,8 +6,12 @@ import { createRedisCache } from './cache.js'
 const MAX_DOWNLOAD_BYTES = Number(process.env.MAX_DOWNLOAD_BYTES || 64 * 1024 * 1024)
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 30_000)
 const FFMPEG_BIN = process.env.FFMPEG_BIN || 'ffmpeg'
-const FFPROBE_BIN = process.env.FFPROBE_BIN || 'ffprobe'
 const TARGET_LUFS = Number(process.env.TARGET_LUFS || -14)
+const ANALYSIS_DURATION_SECONDS = Number(process.env.ANALYSIS_DURATION_SECONDS || 10)
+const ANALYSIS_CONCURRENCY = Math.max(1, Number(process.env.ANALYSIS_CONCURRENCY || 2))
+const ANALYSIS_QUEUE_LIMIT = Math.max(0, Number(process.env.ANALYSIS_QUEUE_LIMIT || 16))
+const ANALYSIS_QUEUE_TIMEOUT_MS = Number(process.env.ANALYSIS_QUEUE_TIMEOUT_MS || 2_000)
+const CACHE_OPERATION_TIMEOUT_MS = Number(process.env.CACHE_OPERATION_TIMEOUT_MS || 500)
 
 export const attachSocketErrorHandler = (server, onUnexpectedError = console.error) => {
     server.on('connection', (socket) => {
@@ -20,16 +24,85 @@ export const attachSocketErrorHandler = (server, onUnexpectedError = console.err
 }
 
 export const getAnalysisWindow = (duration) => {
-    if (!Number.isFinite(duration) || duration > 60) return { start: 60, duration: 30 }
-    return { start: Math.max(0, duration - 30), duration: Math.min(30, Math.max(0, duration)) }
+    if (!Number.isFinite(duration)) return { start: 30, duration: ANALYSIS_DURATION_SECONDS }
+    const safeDuration = Math.max(0, duration)
+    const start = Math.min(30, Math.max(0, safeDuration - ANALYSIS_DURATION_SECONDS))
+    return { start, duration: Math.min(ANALYSIS_DURATION_SECONDS, safeDuration - start) }
 }
 
-export const createFfmpegArgs = ({ start = 60, duration = 30 } = {}) => [
-    '-hide_banner', '-loglevel', 'info', '-i', 'pipe:0', '-ss', String(start), '-t', String(duration),
-    '-vn', '-af', 'ebur128=framelog=quiet:peak=true', '-f', 'null', '-',
-]
+export const createFfmpegArgs = ({ source = 'pipe:0', start = 30, duration = ANALYSIS_DURATION_SECONDS } = {}) => {
+    const inputArgs = source === 'pipe:0'
+        ? ['-i', source, '-ss', String(start), '-t', String(duration)]
+        : ['-ss', String(start), '-t', String(duration), '-i', source]
+    return [
+        '-hide_banner', '-loglevel', 'info', '-threads', '1', ...inputArgs,
+        '-vn', '-af', 'ebur128=framelog=quiet:peak=true', '-f', 'null', '-',
+    ]
+}
+
+export const createAnalysisLimiter = ({ concurrency = ANALYSIS_CONCURRENCY, queueLimit = ANALYSIS_QUEUE_LIMIT } = {}) => {
+    const maxConcurrency = Math.max(1, Math.floor(concurrency))
+    const maxQueue = Math.max(0, Math.floor(queueLimit))
+    let active = 0
+    const queue = []
+
+    const createRelease = () => {
+        let released = false
+        return () => {
+            if (released) return
+            released = true
+            active -= 1
+            while (queue.length) {
+                const next = queue.shift()
+                if (next.signal?.aborted) {
+                    next.reject(Object.assign(new Error('analysis queue wait was aborted'), { code: 'ANALYSIS_QUEUE_ABORTED' }))
+                    continue
+                }
+                next.signal?.removeEventListener('abort', next.onAbort)
+                active += 1
+                next.resolve(createRelease())
+                break
+            }
+        }
+    }
+
+    const abortError = () => Object.assign(new Error('analysis queue wait was aborted'), { code: 'ANALYSIS_QUEUE_ABORTED' })
+
+    return {
+        acquire({ signal } = {}) {
+            if (signal?.aborted) return Promise.reject(abortError())
+            if (active < maxConcurrency) {
+                active += 1
+                return Promise.resolve(createRelease())
+            }
+            if (queue.length >= maxQueue) {
+                const error = new Error('analysis queue is full')
+                error.code = 'ANALYSIS_QUEUE_FULL'
+                return Promise.reject(error)
+            }
+            return new Promise((resolve, reject) => {
+                const entry = { resolve, reject, signal, onAbort: undefined }
+                entry.onAbort = () => {
+                    const index = queue.indexOf(entry)
+                    if (index >= 0) queue.splice(index, 1)
+                    reject(abortError())
+                }
+                signal?.addEventListener('abort', entry.onAbort, { once: true })
+                queue.push(entry)
+            })
+        },
+    }
+}
 
 const round4 = (value) => Math.round(value * 10000) / 10000
+
+const withTimeout = (operation, timeoutMs) => {
+    let timer
+    return Promise.race([
+        operation,
+        new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error('cache operation timed out'), { code: 'CACHE_TIMEOUT' })), timeoutMs) }),
+    ]).finally(() => clearTimeout(timer))
+}
 
 export const parseEbur128Summary = (stderr) => {
     const lufsMatch = String(stderr).match(/Integrated loudness:[\s\S]*?\bI:\s*(-?\d+(?:\.\d+)?)\s*LUFS/i)
@@ -120,6 +193,7 @@ export const pipeResponseToStdin = async (response, stdin, maxBytes = MAX_DOWNLO
             if (!stdin.write(Buffer.from(value))) await once(stdin, 'drain')
         }
     } finally {
+        if (stopped) await reader.cancel().catch(() => {})
         reader.releaseLock()
         stdin.removeListener?.('error', onError)
     }
@@ -128,42 +202,9 @@ export const pipeResponseToStdin = async (response, stdin, maxBytes = MAX_DOWNLO
     await endStdin(stdin)
 }
 
-const readResponse = async (response) => {
-    const chunks = []
-    let size = 0
-    const reader = response.body?.getReader()
-    if (!reader) return Buffer.from(await response.arrayBuffer())
-    try {
-        while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            size += value.byteLength
-            if (size > MAX_DOWNLOAD_BYTES) throw new Error(`audio exceeds ${MAX_DOWNLOAD_BYTES} bytes`)
-            chunks.push(Buffer.from(value))
-        }
-    } finally {
-        reader.releaseLock()
-    }
-    return Buffer.concat(chunks, size)
-}
-
-const probeDuration = (buffer) => new Promise((resolve) => {
-    const child = spawn(FFPROBE_BIN, [
-        '-v', 'error', '-show_entries', 'format=duration',
-        '-of', 'default=noprint_wrappers=1:nokey=1', '-i', 'pipe:0',
-    ], { stdio: ['pipe', 'pipe', 'ignore'] })
-    let stdout = ''
-    child.stdout.on('data', (chunk) => { stdout += chunk.toString() })
-    child.on('error', () => resolve(undefined))
-    child.on('close', (code) => {
-        const duration = Number.parseFloat(stdout.trim())
-        resolve(code === 0 && Number.isFinite(duration) ? duration : undefined)
-    })
-    endStdin(child.stdin, buffer).catch(() => {})
-})
-
-const analyzeWithFfmpeg = (input, window) => new Promise((resolve, reject) => {
-    const child = spawn(FFMPEG_BIN, createFfmpegArgs(window), { stdio: ['pipe', 'pipe', 'pipe'] })
+const analyzeWithFfmpeg = (input, window, signal) => new Promise((resolve, reject) => {
+    const isUrl = typeof input === 'string'
+    const child = spawn(FFMPEG_BIN, createFfmpegArgs({ ...window, ...(isUrl ? { source: input } : {}) }), { stdio: ['pipe', 'pipe', 'pipe'], signal })
     let stderr = ''
     child.stderr.on('data', (chunk) => { stderr += chunk.toString() })
     child.stdout.resume()
@@ -177,6 +218,7 @@ const analyzeWithFfmpeg = (input, window) => new Promise((resolve, reject) => {
             resolve({ gain, peak: summary.peak === undefined ? undefined : round4(summary.peak * (10 ** (gain / 20))) })
         }
     })
+    if (isUrl) return
     const inputPromise = Buffer.isBuffer(input)
         ? endStdin(child.stdin, input)
         : pipeResponseToStdin(input, child.stdin)
@@ -189,17 +231,23 @@ const analyzeWithFfmpeg = (input, window) => new Promise((resolve, reject) => {
 })
 
 export const analyzeBuffer = async (buffer, contentType = '') => {
-    const duration = await probeDuration(buffer)
-    const loudness = await analyzeWithFfmpeg(buffer, getAnalysisWindow(duration))
+    const loudness = await analyzeWithFfmpeg(buffer, getAnalysisWindow())
     return { loudness, decoder: 'ffmpeg', contentType }
 }
 
 export const analyzeResponse = async (response, contentType = '') => {
-    return analyzeBuffer(await readResponse(response), contentType)
+    const loudness = await analyzeWithFfmpeg(response, getAnalysisWindow())
+    return { loudness, decoder: 'ffmpeg', contentType }
 }
 
-export const createApp = ({ cache = createRedisCache() } = {}) => {
+export const analyzeUrl = async (url, signal, contentType = '') => {
+    const loudness = await analyzeWithFfmpeg(url, getAnalysisWindow(), signal)
+    return { loudness, decoder: 'ffmpeg', contentType }
+}
+
+export const createApp = ({ cache = createRedisCache(), limiter = createAnalysisLimiter(), analyze = analyzeUrl, cacheTimeoutMs = CACHE_OPERATION_TIMEOUT_MS } = {}) => {
     const app = new Hono()
+    const inFlight = new Map()
     app.get('/healthz', (c) => c.json({ ok: true }))
     app.get('/analyze', async (c) => {
         const url = extractAudioUrl(c.req.url) || c.req.query('url')
@@ -208,28 +256,51 @@ export const createApp = ({ cache = createRedisCache() } = {}) => {
         try { parsed = new URL(url) } catch { return c.json({ error: 'url must be valid' }, 400) }
         if (!['http:', 'https:'].includes(parsed.protocol)) return c.json({ error: 'only direct http and https audio URLs are supported' }, 400)
         const songId = c.req.query('id') || c.req.query('songId')
-        if (songId) {
-            try {
-                const cached = await cache.get(songId)
-                if (cached?.loudness) return c.json({ ...cached, source: 'cache', cacheHit: true })
-            } catch (error) { console.warn('[AudioLoudness] Redis read skipped:', error?.message || error) }
-        }
-        const controller = new AbortController()
-        const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
-        try {
-            const response = await fetchAudioResponse(parsed, { signal: controller.signal })
-            if (!response.ok) return c.json({ error: `audio download failed with status ${response.status}` }, 502)
-            const result = await analyzeResponse(response, response.headers.get('content-type') || '')
-            if (!result.loudness) return c.json({ error: 'unable to decode audio' }, 422)
-            const payload = { loudness: result.loudness, ...(result.duration ? { duration: result.duration } : {}), source: 'url', decoder: result.decoder, cacheHit: false }
+        const key = songId ? String(songId).trim() : ''
+        const existing = key ? inFlight.get(key) : undefined
+        const execute = async () => {
             if (songId) {
-                try { await cache.set(songId, payload) } catch (error) { console.warn('[AudioLoudness] Redis write skipped:', error?.message || error) }
+                try {
+                    const cached = await withTimeout(cache.get(songId), cacheTimeoutMs)
+                    if (cached?.loudness) return { ...cached, source: 'cache', cacheHit: true }
+                } catch (error) { console.warn('[AudioLoudness] Redis read skipped:', error?.message || error) }
             }
-            return c.json(payload)
+            const queueController = new AbortController()
+            const queueTimeout = setTimeout(() => queueController.abort(), ANALYSIS_QUEUE_TIMEOUT_MS)
+            let release
+            try {
+                release = await limiter.acquire({ signal: queueController.signal })
+            } finally {
+                clearTimeout(queueTimeout)
+            }
+            const controller = new AbortController()
+            const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+            try {
+                const result = await analyze(parsed.toString(), controller.signal)
+                if (!result.loudness) throw Object.assign(new Error('unable to decode audio'), { status: 422 })
+                const payload = { loudness: result.loudness, source: 'url', decoder: result.decoder, cacheHit: false }
+                if (songId) {
+                    try { await withTimeout(cache.set(songId, payload), cacheTimeoutMs) } catch (error) { console.warn('[AudioLoudness] Redis write skipped:', error?.message || error) }
+                }
+                return payload
+            } finally {
+                clearTimeout(timeout)
+                release()
+            }
+        }
+        const task = existing || (key && cache.withLock ? cache.withLock(key, execute) : execute())
+        if (key && !existing) inFlight.set(key, task)
+        try {
+            return c.json(await task, 200)
         } catch (error) {
+            if (error?.code === 'ANALYSIS_QUEUE_FULL') return c.json({ error: 'analysis queue is full' }, 429)
+            if (error?.code === 'ANALYSIS_QUEUE_ABORTED') return c.json({ error: 'analysis queue wait timed out' }, 429)
+            if (error?.code === 'CACHE_LOCK_TIMEOUT') return c.json({ error: 'analysis is busy, please retry' }, 503)
             const message = error?.name === 'AbortError' ? 'audio download timed out' : describeRequestError(error)
-            return c.json({ error: message }, 502)
-        } finally { clearTimeout(timeout) }
+            return c.json({ error: message }, error?.status || 502)
+        } finally {
+            if (key && inFlight.get(key) === task) inFlight.delete(key)
+        }
     })
     return app
 }
