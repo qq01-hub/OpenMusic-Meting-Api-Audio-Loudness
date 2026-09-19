@@ -64,9 +64,11 @@ const isClosedStdinError = (error) => error?.code === 'EPIPE' || error?.code ===
 
 const endStdin = (stdin, value) => new Promise((resolve, reject) => {
     let settled = false
+    let fallback
     const finish = (error) => {
         if (settled) return
         settled = true
+        if (fallback) clearImmediate(fallback)
         stdin.removeListener?.('error', onError)
         if (!error || isClosedStdinError(error)) resolve()
         else reject(error)
@@ -75,6 +77,7 @@ const endStdin = (stdin, value) => new Promise((resolve, reject) => {
     stdin.on?.('error', onError)
     try {
         stdin.end(value, finish)
+        fallback = setImmediate(finish)
     } catch (error) {
         finish(error)
     }
@@ -111,7 +114,7 @@ export const pipeResponseToStdin = async (response, stdin, maxBytes = MAX_DOWNLO
     }
     if (streamError) throw streamError
     if (stopped) return
-    stdin.end()
+    await endStdin(stdin)
 }
 
 const readResponse = async (response) => {

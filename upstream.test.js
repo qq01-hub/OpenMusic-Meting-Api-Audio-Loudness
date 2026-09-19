@@ -124,3 +124,20 @@ test('does not crash when stdin closes during a buffered end', async () => {
 
     await pipeResponseToStdin({ arrayBuffer: async () => Uint8Array.from([1]).buffer }, stdin)
 })
+
+test('does not crash when stdin closes while ending a streamed response', async () => {
+    const stdin = new EventEmitter()
+    stdin.write = () => true
+    stdin.end = () => {
+        process.nextTick(() => stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })))
+    }
+
+    const body = new ReadableStream({
+        start(controller) {
+            controller.enqueue(new Uint8Array([1]))
+            controller.close()
+        },
+    })
+
+    await pipeResponseToStdin({ body }, stdin)
+})
