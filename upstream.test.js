@@ -24,7 +24,7 @@ test('cancels a request that times out while waiting for a worker', async () => 
 
 test('limits URL analysis to seconds 30 through 40', () => {
     assert.deepEqual(createFfmpegArgs({ source: 'https://cdn.example/audio.mp3' }), [
-        '-hide_banner', '-loglevel', 'info', '-threads', '1', '-ss', '30', '-t', '10', '-i', 'https://cdn.example/audio.mp3',
+        '-hide_banner', '-loglevel', 'info', '-threads', '1', '-rw_timeout', '8000000', '-timeout', '8000000', '-ss', '30', '-t', '10', '-i', 'https://cdn.example/audio.mp3',
         '-vn', '-af', 'ebur128=framelog=quiet:peak=true', '-f', 'null', '-',
     ])
 })

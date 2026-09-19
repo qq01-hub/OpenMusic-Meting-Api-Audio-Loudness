@@ -45,6 +45,23 @@ test('deduplicates simultaneous requests for the same song id', async () => {
     assert.equal(responses.filter((response) => response.status === 200).length, 20)
 })
 
+test('deduplicates simultaneous requests for the same URL without a song id', async () => {
+    let analyses = 0
+    const app = createApp({
+        cache: { async get() { return null }, async set() {} },
+        analyze: async () => {
+            analyses += 1
+            await new Promise((resolve) => setTimeout(resolve, 10))
+            return { loudness: { gain: -1, peak: 0.8 }, decoder: 'test' }
+        },
+    })
+    const url = 'https://cdn.example.com/audio/shared.wav'
+    const responses = await Promise.all(Array.from({ length: 20 }, () => app.request(`/analyze?url=${encodeURIComponent(url)}`)))
+
+    assert.equal(analyses, 1)
+    assert.equal(responses.filter((response) => response.status === 200).length, 20)
+})
+
 test('continues analyzing when Redis is slow', async () => {
     let analyzed = false
     const app = createApp({

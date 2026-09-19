@@ -35,7 +35,7 @@ export const createFfmpegArgs = ({ source = 'pipe:0', start = 30, duration = ANA
         ? ['-i', source, '-ss', String(start), '-t', String(duration)]
         : ['-ss', String(start), '-t', String(duration), '-i', source]
     return [
-        '-hide_banner', '-loglevel', 'info', '-threads', '1', ...inputArgs,
+        '-hide_banner', '-loglevel', 'info', '-threads', '1', '-rw_timeout', '8000000', '-timeout', '8000000', ...inputArgs,
         '-vn', '-af', 'ebur128=framelog=quiet:peak=true', '-f', 'null', '-',
     ]
 }
@@ -257,7 +257,8 @@ export const createApp = ({ cache = createRedisCache(), limiter = createAnalysis
         if (!['http:', 'https:'].includes(parsed.protocol)) return c.json({ error: 'only direct http and https audio URLs are supported' }, 400)
         const songId = c.req.query('id') || c.req.query('songId')
         const key = songId ? String(songId).trim() : ''
-        const existing = key ? inFlight.get(key) : undefined
+        const requestKey = key || parsed.toString()
+        const existing = inFlight.get(requestKey)
         const execute = async () => {
             if (songId) {
                 try {
@@ -289,7 +290,7 @@ export const createApp = ({ cache = createRedisCache(), limiter = createAnalysis
             }
         }
         const task = existing || (key && cache.withLock ? cache.withLock(key, execute) : execute())
-        if (key && !existing) inFlight.set(key, task)
+        if (!existing) inFlight.set(requestKey, task)
         try {
             return c.json(await task, 200)
         } catch (error) {
@@ -299,7 +300,7 @@ export const createApp = ({ cache = createRedisCache(), limiter = createAnalysis
             const message = error?.name === 'AbortError' ? 'audio download timed out' : describeRequestError(error)
             return c.json({ error: message }, error?.status || 502)
         } finally {
-            if (key && inFlight.get(key) === task) inFlight.delete(key)
+            if (inFlight.get(requestKey) === task) inFlight.delete(requestKey)
         }
     })
     return app

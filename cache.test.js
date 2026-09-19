@@ -34,6 +34,21 @@ test('retries Redis connection after a transient connection failure', async () =
     assert.equal(attempts, 2)
 })
 
+test('falls back to analysis when Redis lock reads hang', async () => {
+    const cache = createLoudnessCache({
+        async get() { return new Promise(() => {}) },
+        async setNx() { return 'OK' },
+        async del() {},
+    }, undefined, { operationTimeoutMs: 10 })
+
+    const result = await Promise.race([
+        cache.withLock('song-timeout', async () => ({ loudness: { gain: -2 } })),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Redis lock read did not time out')), 100)),
+    ])
+
+    assert.deepEqual(result, { loudness: { gain: -2 } })
+})
+
 test('waits for another worker and reuses its distributed result', async () => {
     const values = new Map()
     const locks = new Set()

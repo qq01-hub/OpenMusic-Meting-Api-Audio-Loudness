@@ -4,9 +4,20 @@ import { randomUUID } from 'node:crypto'
 const CACHE_PREFIX = 'meting:loudness:v3:'
 const LOCK_PREFIX = `${CACHE_PREFIX}lock:`
 
+const withTimeout = (operation, timeoutMs) => {
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return operation
+    let timer
+    return Promise.race([
+        Promise.resolve(operation),
+        new Promise((_, reject) => {
+            timer = setTimeout(() => reject(Object.assign(new Error('cache operation timed out'), { code: 'CACHE_TIMEOUT' })), timeoutMs)
+        }),
+    ]).finally(() => clearTimeout(timer))
+}
+
 export const createCacheKey = (songId) => `${CACHE_PREFIX}${String(songId || '').trim()}`
 
-export const createLoudnessCache = (store, ttlSeconds = Number(process.env.CACHE_TTL_SECONDS || 2592000)) => {
+export const createLoudnessCache = (store, ttlSeconds = Number(process.env.CACHE_TTL_SECONDS || 2592000), { operationTimeoutMs = Number(process.env.CACHE_OPERATION_TIMEOUT_MS || 500) } = {}) => {
     const cache = {
         async get(songId) {
             if (!songId) return null
@@ -27,12 +38,12 @@ export const createLoudnessCache = (store, ttlSeconds = Number(process.env.CACHE
             const deadline = Date.now() + waitMs
             while (Date.now() < deadline) {
                 let cached
-                try { cached = await cache.get(songId) } catch { return task() }
+                try { cached = await withTimeout(cache.get(songId), operationTimeoutMs) } catch { return task() }
                 if (cached?.loudness) return { ...cached, source: 'cache', cacheHit: true }
                 let acquired
-                try { acquired = await store.setNx(lockKey, token, ttlMs) } catch { return task() }
+                try { acquired = await withTimeout(store.setNx(lockKey, token, ttlMs), operationTimeoutMs) } catch { return task() }
                 if (acquired) {
-                    try { return await task() } finally { try { await store.del?.(lockKey) } catch {} }
+                    try { return await task() } finally { try { await withTimeout(store.del?.(lockKey), operationTimeoutMs) } catch {} }
                 }
                 await new Promise((resolve) => setTimeout(resolve, 100))
             }
