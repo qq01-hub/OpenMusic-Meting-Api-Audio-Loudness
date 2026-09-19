@@ -1,20 +1,29 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { Hono } from 'hono'
-import { decodeWav, createPcmAccumulator } from './loudness.js'
 import { createRedisCache } from './cache.js'
 
 const MAX_DOWNLOAD_BYTES = Number(process.env.MAX_DOWNLOAD_BYTES || 64 * 1024 * 1024)
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 30_000)
 const FFMPEG_BIN = process.env.FFMPEG_BIN || 'ffmpeg'
-const ANALYSIS_START_SECONDS = 20
-const ANALYSIS_DURATION_SECONDS = 30
-
 export const createFfmpegArgs = () => [
-    '-hide_banner', '-loglevel', 'error', '-i', 'pipe:0',
-    '-ss', String(ANALYSIS_START_SECONDS), '-t', String(ANALYSIS_DURATION_SECONDS),
-    '-vn', '-ac', '2', '-ar', '48000', '-f', 'f32le', 'pipe:1',
+    '-hide_banner', '-loglevel', 'info', '-i', 'pipe:0',
+    '-vn', '-af', 'ebur128=framelog=quiet:peak=true', '-f', 'null', '-',
 ]
+
+const round4 = (value) => Math.round(value * 10000) / 10000
+
+export const parseEbur128Summary = (stderr) => {
+    const lufsMatch = String(stderr).match(/Integrated loudness:[\s\S]*?\bI:\s*(-?\d+(?:\.\d+)?)\s*LUFS/i)
+    const truePeakMatch = String(stderr).match(/True peak:[\s\S]*?\bPeak:\s*(-?\d+(?:\.\d+)?)\s*dBFS/i)
+    if (!lufsMatch) return undefined
+    const lufs = Number(lufsMatch[1])
+    const truePeak = truePeakMatch ? Number(truePeakMatch[1]) : undefined
+    return {
+        lufs: round4(lufs),
+        ...(truePeak === undefined ? {} : { truePeak: round4(truePeak), peak: round4(10 ** (truePeak / 20)) }),
+    }
+}
 
 export const extractAudioUrl = (requestUrl) => {
     const marker = 'url='
@@ -32,7 +41,7 @@ export const describeRequestError = (error) => {
 
 export const fetchAudioResponse = async (target, options = {}) => {
     let current = new URL(target)
-    let headers = options.headers || {}
+    let headers = options.headers || { 'User-Agent': process.env.UPSTREAM_USER_AGENT || 'meting-api-audio-loudness/1.0' }
     for (let redirect = 0; redirect <= 5; redirect += 1) {
         const response = await fetch(current, { ...options, headers, redirect: 'manual' })
         if (response.status < 300 || response.status >= 400) return response
@@ -53,8 +62,16 @@ export const pipeResponseToStdin = async (response, stdin, maxBytes = MAX_DOWNLO
         return
     }
     let size = 0
+    let stopped = false
+    let streamError
+    const onError = (error) => {
+        if (error?.code === 'EPIPE' || error?.code === 'ERR_STREAM_DESTROYED') stopped = true
+        else streamError = error
+    }
+    stdin.on?.('error', onError)
     try {
         while (true) {
+            if (stopped || streamError) break
             const { done, value } = await reader.read()
             if (done) break
             size += value.byteLength
@@ -63,7 +80,10 @@ export const pipeResponseToStdin = async (response, stdin, maxBytes = MAX_DOWNLO
         }
     } finally {
         reader.releaseLock()
+        stdin.removeListener?.('error', onError)
     }
+    if (streamError) throw streamError
+    if (stopped) return
     stdin.end()
 }
 
@@ -88,22 +108,16 @@ const readResponse = async (response) => {
 
 const analyzeWithFfmpeg = (input) => new Promise((resolve, reject) => {
     const child = spawn(FFMPEG_BIN, createFfmpegArgs(), { stdio: ['pipe', 'pipe', 'pipe'] })
-    const accumulator = createPcmAccumulator()
-    let remainder = Buffer.alloc(0)
     let stderr = ''
     child.stderr.on('data', (chunk) => { stderr += chunk.toString() })
-    child.stdout.on('data', (chunk) => {
-        const bytes = Buffer.concat([remainder, chunk])
-        const usable = bytes.length - (bytes.length % 4)
-        const samples = new Float32Array(usable / 4)
-        for (let index = 0; index < usable; index += 4) samples[index / 4] = bytes.readFloatLE(index)
-        accumulator.add(samples)
-        remainder = bytes.subarray(usable)
-    })
+    child.stdout.resume()
     child.on('error', reject)
     child.on('close', (code) => {
         if (code !== 0) reject(new Error(stderr.trim() || `ffmpeg exited with code ${code}`))
-        else resolve(accumulator.result())
+        else {
+            const summary = parseEbur128Summary(stderr)
+            resolve(summary ? { gain: summary.lufs, peak: summary.peak } : undefined)
+        }
     })
     const inputPromise = Buffer.isBuffer(input)
         ? Promise.resolve(child.stdin.end(input))
@@ -117,14 +131,11 @@ const analyzeWithFfmpeg = (input) => new Promise((resolve, reject) => {
 })
 
 export const analyzeBuffer = async (buffer, contentType = '') => {
-    const wav = decodeWav(buffer)
-    if (wav) return { loudness: (() => { const result = createPcmAccumulator(); result.add(wav.samples); return result.result() })(), duration: wav.duration, decoder: 'wav' }
     const loudness = await analyzeWithFfmpeg(buffer)
     return { loudness, decoder: 'ffmpeg', contentType }
 }
 
 export const analyzeResponse = async (response, contentType = '') => {
-    if (contentType.toLowerCase().includes('wav')) return analyzeBuffer(await readResponse(response), contentType)
     return { loudness: await analyzeWithFfmpeg(response), decoder: 'ffmpeg', contentType }
 }
 

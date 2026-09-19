@@ -66,8 +66,8 @@ http://localhost:3100/analyze?id=song-123&url=https%3A%2F%2Fexample.com%2Faudio.
 ```json
 {
   "loudness": {
-    "gain": -10.1234,
-    "peak": 0.9876
+    "gain": -14.2000,
+    "peak": 0.8913
   },
   "source": "url",
   "decoder": "ffmpeg",
@@ -75,7 +75,7 @@ http://localhost:3100/analyze?id=song-123&url=https%3A%2F%2Fexample.com%2Faudio.
 }
 ```
 
-> `url` 必须是歌曲音频直链，而不是 Meting-API 的接口地址；`gain` 为 RMS dBFS，`peak` 为线性峰值，均保留 4 位小数。URL 中如果包含 `&`，请先对完整 URL 进行编码。
+> `url` 必须是歌曲音频直链，而不是 Meting-API 的接口地址；`gain` 为全曲 Integrated LUFS，`peak` 为 True Peak 转换后的线性值，均保留 4 位小数。URL 中如果包含 `&`，请先对完整 URL 进行编码。
 
 ## ⚙️ 配置项
 

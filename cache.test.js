@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createCacheKey, createLoudnessCache } from './cache.js'
 
 test('creates a stable Redis key from the song id', () => {
-    assert.equal(createCacheKey('  12345 '), 'meting:loudness:v1:12345')
+    assert.equal(createCacheKey('  12345 '), 'meting:loudness:v2:12345')
 })
 
 test('reads and writes cached loudness by song id', async () => {
