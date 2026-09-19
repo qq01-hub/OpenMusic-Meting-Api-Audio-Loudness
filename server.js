@@ -8,6 +8,17 @@ const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 30_000)
 const FFMPEG_BIN = process.env.FFMPEG_BIN || 'ffmpeg'
 const FFPROBE_BIN = process.env.FFPROBE_BIN || 'ffprobe'
 const TARGET_LUFS = Number(process.env.TARGET_LUFS || -14)
+
+export const attachSocketErrorHandler = (server, onUnexpectedError = console.error) => {
+    server.on('connection', (socket) => {
+        socket.on('error', (error) => {
+            if (error?.code === 'EPIPE' || error?.code === 'ECONNRESET' || error?.code === 'ERR_STREAM_DESTROYED') return
+            onUnexpectedError(error)
+        })
+    })
+    return server
+}
+
 export const getAnalysisWindow = (duration) => {
     if (!Number.isFinite(duration) || duration > 60) return { start: 60, duration: 30 }
     return { start: Math.max(0, duration - 30), duration: Math.min(30, Math.max(0, duration)) }
@@ -69,12 +80,12 @@ const endStdin = (stdin, value) => new Promise((resolve, reject) => {
         if (settled) return
         settled = true
         if (fallback) clearImmediate(fallback)
-        stdin.removeListener?.('error', onError)
         if (!error || isClosedStdinError(error)) resolve()
         else reject(error)
     }
     const onError = (error) => finish(error)
     stdin.on?.('error', onError)
+    stdin.once?.('close', () => stdin.removeListener?.('error', onError))
     try {
         stdin.end(value, finish)
         fallback = setImmediate(finish)
