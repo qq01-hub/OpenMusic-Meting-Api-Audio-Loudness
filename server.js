@@ -60,12 +60,32 @@ export const fetchAudioResponse = async (target, options = {}) => {
     throw new Error('too many audio redirects')
 }
 
+const isClosedStdinError = (error) => error?.code === 'EPIPE' || error?.code === 'ERR_STREAM_DESTROYED'
+
+const endStdin = (stdin, value) => new Promise((resolve, reject) => {
+    let settled = false
+    const finish = (error) => {
+        if (settled) return
+        settled = true
+        stdin.removeListener?.('error', onError)
+        if (!error || isClosedStdinError(error)) resolve()
+        else reject(error)
+    }
+    const onError = (error) => finish(error)
+    stdin.on?.('error', onError)
+    try {
+        stdin.end(value, finish)
+    } catch (error) {
+        finish(error)
+    }
+})
+
 export const pipeResponseToStdin = async (response, stdin, maxBytes = MAX_DOWNLOAD_BYTES) => {
     const reader = response.body?.getReader()
     if (!reader) {
         const buffer = Buffer.from(await response.arrayBuffer())
         if (buffer.length > maxBytes) throw new Error(`audio exceeds ${maxBytes} bytes`)
-        stdin.end(buffer)
+        await endStdin(stdin, buffer)
         return
     }
     let size = 0
@@ -125,7 +145,7 @@ const probeDuration = (buffer) => new Promise((resolve) => {
         const duration = Number.parseFloat(stdout.trim())
         resolve(code === 0 && Number.isFinite(duration) ? duration : undefined)
     })
-    child.stdin.end(buffer)
+    endStdin(child.stdin, buffer).catch(() => {})
 })
 
 const analyzeWithFfmpeg = (input, window) => new Promise((resolve, reject) => {
@@ -144,10 +164,10 @@ const analyzeWithFfmpeg = (input, window) => new Promise((resolve, reject) => {
         }
     })
     const inputPromise = Buffer.isBuffer(input)
-        ? Promise.resolve(child.stdin.end(input))
+        ? endStdin(child.stdin, input)
         : pipeResponseToStdin(input, child.stdin)
     inputPromise.catch((error) => {
-        if (error?.code === 'EPIPE' || error?.code === 'ERR_STREAM_DESTROYED') return
+        if (isClosedStdinError(error)) return
         child.stdin.destroy(error)
         child.kill()
         reject(error)

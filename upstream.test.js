@@ -115,3 +115,12 @@ test('does not crash when ffmpeg closes stdin early', async () => {
 
     await pipeResponseToStdin({ body }, stdin)
 })
+
+test('does not crash when stdin closes during a buffered end', async () => {
+    const stdin = new EventEmitter()
+    stdin.end = () => {
+        process.nextTick(() => stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })))
+    }
+
+    await pipeResponseToStdin({ arrayBuffer: async () => Uint8Array.from([1]).buffer }, stdin)
+})
