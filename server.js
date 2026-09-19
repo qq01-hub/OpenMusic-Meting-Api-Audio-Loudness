@@ -6,6 +6,7 @@ import { createRedisCache } from './cache.js'
 const MAX_DOWNLOAD_BYTES = Number(process.env.MAX_DOWNLOAD_BYTES || 64 * 1024 * 1024)
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 30_000)
 const FFMPEG_BIN = process.env.FFMPEG_BIN || 'ffmpeg'
+const TARGET_LUFS = Number(process.env.TARGET_LUFS || -14)
 export const createFfmpegArgs = () => [
     '-hide_banner', '-loglevel', 'info', '-i', 'pipe:0',
     '-vn', '-af', 'ebur128=framelog=quiet:peak=true', '-f', 'null', '-',
@@ -116,7 +117,9 @@ const analyzeWithFfmpeg = (input) => new Promise((resolve, reject) => {
         if (code !== 0) reject(new Error(stderr.trim() || `ffmpeg exited with code ${code}`))
         else {
             const summary = parseEbur128Summary(stderr)
-            resolve(summary ? { gain: summary.lufs, peak: summary.peak } : undefined)
+            if (!summary) return resolve(undefined)
+            const gain = round4(TARGET_LUFS - summary.lufs)
+            resolve({ gain, peak: summary.peak === undefined ? undefined : round4(summary.peak * (10 ** (gain / 20))) })
         }
     })
     const inputPromise = Buffer.isBuffer(input)

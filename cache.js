@@ -1,6 +1,6 @@
 import { createClient } from 'redis'
 
-const CACHE_PREFIX = 'meting:loudness:v2:'
+const CACHE_PREFIX = 'meting:loudness:v3:'
 
 export const createCacheKey = (songId) => `${CACHE_PREFIX}${String(songId || '').trim()}`
 

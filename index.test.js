@@ -4,7 +4,8 @@ import { createApp, parseEbur128Summary } from './server.js'
 
 test('returns the compatible gain and peak shape from the standard loudness measurement', () => {
     const summary = parseEbur128Summary('Integrated loudness:\n I: -14.2 LUFS\nTrue peak:\n Peak: -1.0 dBFS')
-    assert.deepEqual({ gain: summary.lufs, peak: summary.peak }, { gain: -14.2, peak: 0.8913 })
+    const gain = Number((-14 - summary.lufs).toFixed(4))
+    assert.deepEqual({ gain, peak: Number((summary.peak * (10 ** (gain / 20))).toFixed(4)) }, { gain: 0.2, peak: 0.9121 })
 })
 
 test('rejects an absent URL without downloading anything', async () => {

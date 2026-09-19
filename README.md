@@ -66,8 +66,8 @@ http://localhost:3100/analyze?id=song-123&url=https%3A%2F%2Fexample.com%2Faudio.
 ```json
 {
   "loudness": {
-    "gain": -14.2000,
-    "peak": 0.8913
+    "gain": -4.8000,
+    "peak": 0.7330
   },
   "source": "url",
   "decoder": "ffmpeg",
@@ -75,7 +75,7 @@ http://localhost:3100/analyze?id=song-123&url=https%3A%2F%2Fexample.com%2Faudio.
 }
 ```
 
-> `url` 必须是歌曲音频直链，而不是 Meting-API 的接口地址；`gain` 为全曲 Integrated LUFS，`peak` 为 True Peak 转换后的线性值，均保留 4 位小数。URL 中如果包含 `&`，请先对完整 URL 进行编码。
+> `url` 必须是歌曲音频直链，而不是 Meting-API 的接口地址；`gain` 为将歌曲调整到目标响度的增益修正值（默认目标 `-14 LUFS`），`peak` 为应用该修正后的 True Peak 线性值，均保留 4 位小数。URL 中如果包含 `&`，请先对完整 URL 进行编码。
 
 ## ⚙️ 配置项
 
@@ -85,6 +85,9 @@ http://localhost:3100/analyze?id=song-123&url=https%3A%2F%2Fexample.com%2Faudio.
 | `IMAGE_TAG` | `latest` | Docker 镜像标签 |
 | `MAX_DOWNLOAD_BYTES` | `67108864` | 单个音频最大下载大小（字节） |
 | `REQUEST_TIMEOUT_MS` | `30000` | 音频请求超时时间（毫秒） |
+| `TARGET_LUFS` | `-14` | 统一响度目标；`gain` 为达到该目标所需的修正值 |
+
+响度缓存当前使用 `meting:loudness:v3:` 前缀，之前版本缓存不会被读取。
 
 健康检查：`http://localhost:3100/healthz`
 
