@@ -1,13 +1,21 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { createFfmpegArgs, describeRequestError, extractAudioUrl, fetchAudioResponse, parseEbur128Summary, pipeResponseToStdin } from './server.js'
+import { createFfmpegArgs, describeRequestError, extractAudioUrl, fetchAudioResponse, getAnalysisWindow, parseEbur128Summary, pipeResponseToStdin } from './server.js'
 
-test('measures integrated loudness for the complete audio stream', () => {
+test('analyzes the one-minute to one-minute-thirty window', () => {
     assert.deepEqual(createFfmpegArgs(), [
-        '-hide_banner', '-loglevel', 'info', '-i', 'pipe:0',
+        '-hide_banner', '-loglevel', 'info', '-i', 'pipe:0', '-ss', '60', '-t', '30',
         '-vn', '-af', 'ebur128=framelog=quiet:peak=true', '-f', 'null', '-',
     ])
+})
+
+test('uses the final 30 seconds when the audio is shorter than one minute', () => {
+    assert.deepEqual(getAnalysisWindow(45), { start: 15, duration: 30 })
+})
+
+test('keeps a 30-second window for a full-length audio track', () => {
+    assert.deepEqual(getAnalysisWindow(180), { start: 60, duration: 30 })
 })
 
 test('parses integrated LUFS and true peak from ebur128 output', () => {

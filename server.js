@@ -6,9 +6,15 @@ import { createRedisCache } from './cache.js'
 const MAX_DOWNLOAD_BYTES = Number(process.env.MAX_DOWNLOAD_BYTES || 64 * 1024 * 1024)
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 30_000)
 const FFMPEG_BIN = process.env.FFMPEG_BIN || 'ffmpeg'
+const FFPROBE_BIN = process.env.FFPROBE_BIN || 'ffprobe'
 const TARGET_LUFS = Number(process.env.TARGET_LUFS || -14)
-export const createFfmpegArgs = () => [
-    '-hide_banner', '-loglevel', 'info', '-i', 'pipe:0',
+export const getAnalysisWindow = (duration) => {
+    if (!Number.isFinite(duration) || duration > 60) return { start: 60, duration: 30 }
+    return { start: Math.max(0, duration - 30), duration: Math.min(30, Math.max(0, duration)) }
+}
+
+export const createFfmpegArgs = ({ start = 60, duration = 30 } = {}) => [
+    '-hide_banner', '-loglevel', 'info', '-i', 'pipe:0', '-ss', String(start), '-t', String(duration),
     '-vn', '-af', 'ebur128=framelog=quiet:peak=true', '-f', 'null', '-',
 ]
 
@@ -107,8 +113,23 @@ const readResponse = async (response) => {
     return Buffer.concat(chunks, size)
 }
 
-const analyzeWithFfmpeg = (input) => new Promise((resolve, reject) => {
-    const child = spawn(FFMPEG_BIN, createFfmpegArgs(), { stdio: ['pipe', 'pipe', 'pipe'] })
+const probeDuration = (buffer) => new Promise((resolve) => {
+    const child = spawn(FFPROBE_BIN, [
+        '-v', 'error', '-show_entries', 'format=duration',
+        '-of', 'default=noprint_wrappers=1:nokey=1', '-i', 'pipe:0',
+    ], { stdio: ['pipe', 'pipe', 'ignore'] })
+    let stdout = ''
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString() })
+    child.on('error', () => resolve(undefined))
+    child.on('close', (code) => {
+        const duration = Number.parseFloat(stdout.trim())
+        resolve(code === 0 && Number.isFinite(duration) ? duration : undefined)
+    })
+    child.stdin.end(buffer)
+})
+
+const analyzeWithFfmpeg = (input, window) => new Promise((resolve, reject) => {
+    const child = spawn(FFMPEG_BIN, createFfmpegArgs(window), { stdio: ['pipe', 'pipe', 'pipe'] })
     let stderr = ''
     child.stderr.on('data', (chunk) => { stderr += chunk.toString() })
     child.stdout.resume()
@@ -134,12 +155,13 @@ const analyzeWithFfmpeg = (input) => new Promise((resolve, reject) => {
 })
 
 export const analyzeBuffer = async (buffer, contentType = '') => {
-    const loudness = await analyzeWithFfmpeg(buffer)
+    const duration = await probeDuration(buffer)
+    const loudness = await analyzeWithFfmpeg(buffer, getAnalysisWindow(duration))
     return { loudness, decoder: 'ffmpeg', contentType }
 }
 
 export const analyzeResponse = async (response, contentType = '') => {
-    return { loudness: await analyzeWithFfmpeg(response), decoder: 'ffmpeg', contentType }
+    return analyzeBuffer(await readResponse(response), contentType)
 }
 
 export const createApp = ({ cache = createRedisCache() } = {}) => {
